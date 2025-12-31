@@ -60,13 +60,10 @@ internal static class WindowBlurHelper
         // Wait, ACCENT_ENABLE_BLURBEHIND (3) is safer and provides standard blur. 
         // ACCENT_ENABLE_ACRYLICBLURBEHIND (4) gives that noisy texture.
         
-        // Try Standard Blur (Glass)
-        // ACCENT_ENABLE_BLURBEHIND = 3
-        // This usually works better for generic transparency+blur without complex tuning.
-        accent.AccentState = AccentState.ACCENT_ENABLE_BLURBEHIND;
-        accent.AccentFlags = 0; // Standard
-        // accent.GradientColor is ignored in this mode usually, or set to 0.
-        accent.GradientColor = 0;
+        // Tint: AABBGGRR
+        // Alpha=60 (More Transparent), Blueish=80, Green=40, Red=20 -> 0x60804020 ?
+        // Let's try a cool icy blue: 0x60705030
+        accent.GradientColor = 0x60805030; 
 
         var accentPtr = Marshal.AllocHGlobal(accentStructSize);
         Marshal.StructureToPtr(accent, accentPtr, false);
