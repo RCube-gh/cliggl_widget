@@ -21,13 +21,28 @@ public class ClickUpService
         _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(apiToken);
     }
 
-    public async Task<List<ClickUpTask>> GetTasksAsync(string listId)
+    public async Task<List<ClickUpTask>> GetTasksAsync(string listId, bool onlyDueToday = false)
     {
         var tasks = new List<ClickUpTask>();
         try
         {
-            // Fetch top 15 active tasks, ordered by updated time (or priority if preferred)
-            var response = await _httpClient.GetAsync($"list/{listId}/task?archived=false&page=0&order_by=updated&reverse=true&include_closed=false");
+            var query = "archived=false&page=0&order_by=updated&reverse=true&include_closed=false";
+
+            if (onlyDueToday)
+            {
+                var now = DateTime.Now;
+                var startOfDay = new DateTime(now.Year, now.Month, now.Day, 0, 0, 0, DateTimeKind.Local);
+                var endOfDay = startOfDay.AddDays(1).AddTicks(-1);
+
+                // Convert to Unix milliseconds
+                long startTs = new DateTimeOffset(startOfDay).ToUnixTimeMilliseconds();
+                long endTs = new DateTimeOffset(endOfDay).ToUnixTimeMilliseconds();
+
+                query += $"&due_date_gt={startTs}&due_date_lt={endTs}";
+            }
+
+            // Fetch top active tasks
+            var response = await _httpClient.GetAsync($"list/{listId}/task?{query}");
             
             if (response.IsSuccessStatusCode)
             {
@@ -62,4 +77,7 @@ public class ClickUpTask
 
     [JsonPropertyName("name")]
     public string? Name { get; set; }
+    
+    [JsonPropertyName("due_date")]
+    public string? DueDate { get; set; }
 }

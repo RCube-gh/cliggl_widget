@@ -19,7 +19,7 @@
             MouseDown="Border_MouseDown">
         
         <Border.Background>
-            <SolidColorBrush Color="#1e1e24" Opacity="0.1"/>
+            <SolidColorBrush Color="#18688C" Opacity="0.9"/>
         </Border.Background>
 
         <Border.BorderBrush>

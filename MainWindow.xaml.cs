@@ -12,7 +12,7 @@ namespace FocusHudWpf;
 public partial class MainWindow : Window
 {
     private DispatcherTimer _timer;
-    private TimeSpan _timeRemaining;
+    private DateTime? _currentTaskStartTime; // Changed from _timeRemaining
     private bool _isPlaying = false;
     
     private TogglService? _togglService;
@@ -32,7 +32,6 @@ public partial class MainWindow : Window
         InitializeServices();
 
         // Initialize Timer
-        _timeRemaining = TimeSpan.FromMinutes(25);
         _timer = new DispatcherTimer();
         _timer.Interval = TimeSpan.FromSeconds(1);
         _timer.Tick += Timer_Tick;
@@ -65,6 +64,10 @@ public partial class MainWindow : Window
                             // Sync state: running
                             _isPlaying = true;
                             _currentTogglEntryId = current.Id;
+                            // Toggl returns start time. Ensure we treat it correctly.
+                            // Assuming deserializer handles timezone, convert to UTC to be safe for duration calc
+                            _currentTaskStartTime = current.Start.ToUniversalTime();
+                            
                             _timer.Start();
                             UpdatePlayButtonVisuals();
                             TaskNameText.Text = current.Description ?? "No Description";
@@ -98,7 +101,7 @@ public partial class MainWindow : Window
              {
                  _clickUpListId = listId;
                  _clickUpService = new ClickUpService(token);
-                 var tasks = await _clickUpService.GetTasksAsync(listId);
+                 var tasks = await _clickUpService.GetTasksAsync(listId, true);
                  
                  if (tasks.Count > 0)
                  {
@@ -164,7 +167,7 @@ public partial class MainWindow : Window
         this.Cursor = Cursors.Wait;
         // Delay slightly to let the animation show off (and preventing flash on fast nets)
         // await Task.Delay(500); 
-        var tasks = await _clickUpService.GetTasksAsync(_clickUpListId);
+        var tasks = await _clickUpService.GetTasksAsync(_clickUpListId, true);
         
         // Stop Shimmer
         ShimmerTransform.BeginAnimation(TranslateTransform.XProperty, null); // Stop
@@ -225,15 +228,7 @@ public partial class MainWindow : Window
 
     private void Timer_Tick(object? sender, EventArgs e)
     {
-        if (_timeRemaining.TotalSeconds > 0)
-        {
-            _timeRemaining = _timeRemaining.Subtract(TimeSpan.FromSeconds(1));
-            UpdateTimerDisplay();
-        }
-        else
-        {
-            StopTimer();
-        }
+        UpdateTimerDisplay();
     }
 
     private async void PlayButton_Click(object sender, MouseButtonEventArgs e)
@@ -251,8 +246,10 @@ public partial class MainWindow : Window
     private async Task StartTimer()
     {
         _isPlaying = true;
+        _currentTaskStartTime = DateTime.UtcNow; // Set Start Time
         _timer.Start();
         UpdatePlayButtonVisuals();
+        UpdateTimerDisplay(); // Immediate update
 
         if (_togglService != null && _togglWorkspaceId.HasValue)
         {
@@ -275,7 +272,9 @@ public partial class MainWindow : Window
     {
         _isPlaying = false;
         _timer.Stop();
+        _currentTaskStartTime = null; // Reset
         UpdatePlayButtonVisuals();
+        UpdateTimerDisplay();
 
         if (_togglService != null && _togglWorkspaceId.HasValue && _currentTogglEntryId.HasValue)
         {
@@ -303,7 +302,22 @@ public partial class MainWindow : Window
 
     private void UpdateTimerDisplay()
     {
-        TimerText.Text = _timeRemaining.ToString(@"mm\:ss");
+        if (_isPlaying && _currentTaskStartTime.HasValue)
+        {
+            var elapsed = DateTime.UtcNow - _currentTaskStartTime.Value;
+            if (elapsed.TotalHours >= 1)
+            {
+                TimerText.Text = elapsed.ToString(@"h\:mm\:ss");
+            }
+            else
+            {
+                TimerText.Text = elapsed.ToString(@"mm\:ss");
+            }
+        }
+        else
+        {
+            TimerText.Text = "00:00";
+        }
     }
 
     // Allow dragging the window by clicking anywhere on the border
