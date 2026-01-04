@@ -10,6 +10,15 @@ internal static class WindowBlurHelper
     [DllImport("user32.dll")]
     internal static extern int SetWindowCompositionAttribute(IntPtr hwnd, ref WindowCompositionAttributeData data);
 
+    [DllImport("user32.dll", SetLastError = true)]
+    static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+
+    [DllImport("user32.dll")]
+    static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+
+    private const int GWL_EXSTYLE = -20;
+    private const int WS_EX_TOOLWINDOW = 0x00000080;
+
     [StructLayout(LayoutKind.Sequential)]
     internal struct WindowCompositionAttributeData
     {
@@ -78,5 +87,12 @@ internal static class WindowBlurHelper
         SetWindowCompositionAttribute(windowHelper.Handle, ref data);
 
         Marshal.FreeHGlobal(accentPtr);
+    }
+
+    public static void HideFromAltTab(Window window)
+    {
+        var helper = new WindowInteropHelper(window);
+        int exStyle = GetWindowLong(helper.Handle, GWL_EXSTYLE);
+        SetWindowLong(helper.Handle, GWL_EXSTYLE, exStyle | WS_EX_TOOLWINDOW);
     }
 }

@@ -211,6 +211,7 @@ public partial class MainWindow : Window
         try
         {
             WindowBlurHelper.EnableBlur(this);
+            WindowBlurHelper.HideFromAltTab(this);
             InitializeTrayIcon();
             InitializeWindowSettings();
             RegisterHotKey();
