@@ -48,13 +48,32 @@ public class TogglService
         return null;
     }
 
-    public async Task StartTimeEntryAsync(string description, int workspaceId)
+    public async Task<List<TogglProject>> GetProjectsAsync(int workspaceId)
+    {
+        try
+        {
+            var response = await _httpClient.GetAsync($"workspaces/{workspaceId}/projects?active=true");
+            if (response.IsSuccessStatusCode)
+            {
+                var json = await response.Content.ReadAsStringAsync();
+                return JsonSerializer.Deserialize<List<TogglProject>>(json) ?? new List<TogglProject>();
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Toggl Error: {ex.Message}");
+        }
+        return new List<TogglProject>();
+    }
+
+    public async Task StartTimeEntryAsync(string description, int workspaceId, int? projectId = null)
     {
         var entry = new
         {
             description = description,
             tags = new string[] { "FocusHUD" },
             workspace_id = workspaceId,
+            project_id = projectId,
             created_with = "FocusHUD",
             start = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"),
             duration = -1
@@ -113,4 +132,16 @@ public class TogglTimeEntry
     
     [JsonPropertyName("duration")]
     public long Duration { get; set; } // If negative, it's running. duration = -(start_time_unix)
+}
+
+public class TogglProject
+{
+    [JsonPropertyName("id")]
+    public int Id { get; set; }
+
+    [JsonPropertyName("name")]
+    public string? Name { get; set; }
+    
+    [JsonPropertyName("color")]
+    public string? Color { get; set; }
 }

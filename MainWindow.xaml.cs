@@ -25,9 +25,16 @@ public partial class MainWindow : Window
     private List<ClickUpTask>? _cachedTasks;
     private DateTime _lastFetchTime;
 
+    private UserSettings _userSettings;
+
     public MainWindow()
     {
         InitializeComponent();
+        
+        _userSettings = UserSettings.Load();
+        this.Top = _userSettings.Top;
+        this.Left = _userSettings.Left;
+        this.Topmost = true;
         
         InitializeServices();
 
@@ -57,6 +64,16 @@ public partial class MainWindow : Window
                         _togglService = new TogglService(token);
                         _togglWorkspaceId = await _togglService.GetDefaultWorkspaceIdAsync();
                         
+                        // Load Projects
+                        if (_togglWorkspaceId.HasValue)
+                        {
+                            var projects = await _togglService.GetProjectsAsync(_togglWorkspaceId.Value);
+                            // Add "No Project" option
+                            projects.Insert(0, new TogglProject { Id = 0, Name = "No Project" });
+                            ProjectComboBox.ItemsSource = projects;
+                            ProjectComboBox.SelectedIndex = 0;
+                        }
+                        
                         // Check if running
                         var current = await _togglService.GetCurrentTimeEntryAsync();
                         if (current != null && current.Duration < 0)
@@ -70,7 +87,7 @@ public partial class MainWindow : Window
                             
                             _timer.Start();
                             UpdatePlayButtonVisuals();
-                            TaskNameText.Text = current.Description ?? "No Description";
+                            TaskNameInput.Text = current.Description ?? "No Description";
                         }
                         else
                         {
@@ -83,7 +100,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"Config Error: {ex.Message}");
+            System.Windows.MessageBox.Show($"Config Error: {ex.Message}");
         }
     }
 
@@ -105,47 +122,19 @@ public partial class MainWindow : Window
                  
                  if (tasks.Count > 0)
                  {
-                     TaskNameText.Text = tasks[0].Name;
+                     TaskNameInput.Text = tasks[0].Name;
                  }
                  else
                  {
-                     TaskNameText.Text = "No active tasks";
+                     TaskNameInput.Text = "No active tasks";
                  }
              }
          }
     }
 
-    private async void TaskName_Click(object sender, MouseButtonEventArgs e)
+    private async void RefreshButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_clickUpService == null || string.IsNullOrEmpty(_clickUpListId)) return;
-
-        // Toggle Expand/Collapse
-        if (this.Height > 100)
-        {
-            // Collapse
-            CollapseWindow();
-        }
-        else
-        {
-            // Expand
-            // Set height to show list with animation
-            TaskListArea.Visibility = Visibility.Visible;
-
-            var anim = new System.Windows.Media.Animation.DoubleAnimation(350, TimeSpan.FromSeconds(0.3));
-            anim.EasingFunction = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut };
-            this.BeginAnimation(Window.HeightProperty, anim);
-            
-            // Check Cache
-            if (_cachedTasks == null || _cachedTasks.Count == 0 || DateTime.Now > _lastFetchTime.AddMinutes(15))
-            {
-                 await RefreshTasks();
-            }
-            else
-            {
-                // Use Cache
-                TasksList.ItemsSource = _cachedTasks;
-            }
-        }
+        await RefreshTasks();
     }
 
     private async Task RefreshTasks()
@@ -164,7 +153,7 @@ public partial class MainWindow : Window
         };
         ShimmerTransform.BeginAnimation(TranslateTransform.XProperty, shimmerAnim);
 
-        this.Cursor = Cursors.Wait;
+        this.Cursor = System.Windows.Input.Cursors.Wait;
         // Delay slightly to let the animation show off (and preventing flash on fast nets)
         // await Task.Delay(500); 
         var tasks = await _clickUpService.GetTasksAsync(_clickUpListId, true);
@@ -172,7 +161,7 @@ public partial class MainWindow : Window
         // Stop Shimmer
         ShimmerTransform.BeginAnimation(TranslateTransform.XProperty, null); // Stop
         ShimmerOverlay.Visibility = Visibility.Collapsed;
-        this.Cursor = Cursors.Arrow;
+        this.Cursor = System.Windows.Input.Cursors.Arrow;
         
         if (tasks != null)
         {
@@ -182,12 +171,16 @@ public partial class MainWindow : Window
         }
     }
     
-    private async void Window_KeyDown(object sender, KeyEventArgs e)
+    private async void Window_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
         if (e.Key == Key.R)
         {
             // Force Refresh
             await RefreshTasks();
+        }
+        else if (e.Key == Key.Escape)
+        {
+            SlideOut();
         }
     }
 
@@ -197,13 +190,20 @@ public partial class MainWindow : Window
         {
              if (!string.IsNullOrEmpty(task.Name))
              {
-                 TaskNameText.Text = task.Name;
+                 TaskNameInput.Text = task.Name;
                  // Reset selection so we can click it again if needed? or leave it.
                  TasksList.SelectedItem = null; 
              }
-             CollapseWindow();
+             // SlideOut(); // Don't close on selection, user might want to edit name
         }
     }
+
+    private System.Windows.Forms.NotifyIcon? _notifyIcon;
+    private bool _isReallyExiting = false;
+
+    private HotKeyHelper? _hotKeyHelper;
+    private bool _isVisible = false;
+    private const double PANEL_WIDTH = 300;
 
     protected override void OnSourceInitialized(EventArgs e)
     {
@@ -211,24 +211,157 @@ public partial class MainWindow : Window
         try
         {
             WindowBlurHelper.EnableBlur(this);
+            InitializeTrayIcon();
+            InitializeWindowSettings();
+            RegisterHotKey();
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"Failed to enable blur: {ex.Message}");
+            System.Diagnostics.Debug.WriteLine($"Error: {ex.Message}");
         }
     }
 
-    private void CollapseWindow()
+    private void InitializeWindowSettings()
     {
-        var anim = new System.Windows.Media.Animation.DoubleAnimation(60, TimeSpan.FromSeconds(0.3));
-        anim.EasingFunction = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut };
-        anim.Completed += (s, _) => TaskListArea.Visibility = Visibility.Collapsed;
-        this.BeginAnimation(Window.HeightProperty, anim);
+        // Set initial position (Left side, full height or large height)
+        var workArea = System.Windows.SystemParameters.WorkArea;
+        this.Height = workArea.Height - 40; // Slightly smaller than screen
+        this.Width = PANEL_WIDTH;
+        this.Top = workArea.Top + 20;
+        this.Left = -PANEL_WIDTH; // Start hidden off-screen
+        
+        // Ensure UI is ready
+        this.Visibility = Visibility.Visible; 
+        // Force refresh layout?
     }
+
+    private void RegisterHotKey()
+    {
+        _hotKeyHelper = new HotKeyHelper(new System.Windows.Interop.WindowInteropHelper(this).Handle);
+        _hotKeyHelper.HotKeyPressed += OnHotKeyPressed;
+        // Ctrl + Alt + D
+        _hotKeyHelper.Register(ModifierKeys.Control | ModifierKeys.Alt, Key.D);
+    }
+
+    private void OnHotKeyPressed()
+    {
+        ToggleSlide();
+    }
+
+    private void ToggleSlide()
+    {
+        if (_isVisible)
+        {
+            SlideOut();
+        }
+        else
+        {
+            SlideIn();
+        }
+    }
+
+    private void SlideIn()
+    {
+        _isVisible = true;
+        this.Visibility = Visibility.Visible;
+        this.Activate();
+
+        var anim = new System.Windows.Media.Animation.DoubleAnimation(0, TimeSpan.FromSeconds(0.25));
+        anim.EasingFunction = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut };
+        this.BeginAnimation(Window.LeftProperty, anim);
+    }
+
+    private void SlideOut()
+    {
+        _isVisible = false;
+        
+        var anim = new System.Windows.Media.Animation.DoubleAnimation(-PANEL_WIDTH, TimeSpan.FromSeconds(0.25));
+        anim.EasingFunction = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseIn };
+        anim.Completed += (s, e) => 
+        {
+            // Optional: Hide entirely regarding performance, but keeping it visible just off-screen is smoother
+            // this.Visibility = Visibility.Hidden; 
+        };
+        this.BeginAnimation(Window.LeftProperty, anim);
+    }
+    
+    // Override closing to clean up hotkey
+    protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
+    {
+        if (!_isReallyExiting)
+        {
+            e.Cancel = true; 
+            SlideOut();
+            return;
+        }
+
+        _hotKeyHelper?.Dispose();
+        _notifyIcon?.Dispose();
+        
+        // No need to save position anymore
+        // _userSettings.Save(); 
+        
+        // Call base only if really exiting
+        // base.OnClosing(e); // Base is called automatically if not cancelled? No.
+        // If we cancel, we return. If we don't, we fall through.
+    }
+
+    // Reuse timer for date change check?
+    private DateTime _lastDateCheck = DateTime.Today;
 
     private void Timer_Tick(object? sender, EventArgs e)
     {
         UpdateTimerDisplay();
+        
+        if (DateTime.Today != _lastDateCheck)
+        {
+            _lastDateCheck = DateTime.Today;
+            _ = RefreshTasks(); // Auto refresh on new day
+        }
+    }
+
+    // Tray Icon Click
+    private void ToggleWindowVisibility()
+    {
+        ToggleSlide();
+    }
+    
+    // Border Mouse Down - removed drag move, added slide out on outside click simulation (if we had input hook)
+    // For now, dragging is disabled as position is fixed.
+    private void Border_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+        // Maybe allow dragging mainly for debug? 
+        // Or implement 'click outside to close'? 
+        // For now do nothing or maybe just focus.
+    }
+    private void InitializeTrayIcon()
+    {
+        _notifyIcon = new System.Windows.Forms.NotifyIcon();
+        _notifyIcon.Icon = System.Drawing.SystemIcons.Application; // Default icon
+        _notifyIcon.Visible = true;
+        _notifyIcon.Text = "FocusHUD";
+        
+        // Single click to toggle
+        _notifyIcon.Click += (s, args) =>
+        {
+            // Only toggle on left click to avoid conflict with context menu
+            var me = args as System.Windows.Forms.MouseEventArgs;
+            if (me?.Button == System.Windows.Forms.MouseButtons.Left)
+            {
+                ToggleWindowVisibility();
+            }
+        };
+
+        // Context Menu
+        var contextMenu = new System.Windows.Forms.ContextMenuStrip();
+        var exitItem = new System.Windows.Forms.ToolStripMenuItem("Exit");
+        exitItem.Click += (s, e) => 
+        {
+            _isReallyExiting = true;
+            this.Close();
+        };
+        contextMenu.Items.Add(exitItem);
+        _notifyIcon.ContextMenuStrip = contextMenu;
     }
 
     private async void PlayButton_Click(object sender, MouseButtonEventArgs e)
@@ -253,10 +386,13 @@ public partial class MainWindow : Window
 
         if (_togglService != null && _togglWorkspaceId.HasValue)
         {
-            var taskName = TaskNameText.Text;
+            var taskName = TaskNameInput.Text;
+            var projectId = ProjectComboBox.SelectedValue as int?;
+            if (projectId == 0) projectId = null; // "No Project" check
+
             try 
             {
-                await _togglService.StartTimeEntryAsync(taskName, _togglWorkspaceId.Value);
+                await _togglService.StartTimeEntryAsync(taskName, _togglWorkspaceId.Value, projectId);
                 // Ideally catch the ID
                 var current = await _togglService.GetCurrentTimeEntryAsync();
                 if(current != null) _currentTogglEntryId = current.Id;
@@ -296,8 +432,8 @@ public partial class MainWindow : Window
         PlayIcon.Text = _isPlaying ? "⏸" : "▶";
         
         // Toggle Color (Subtle feedback)
-        var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(_isPlaying ? "#818cf8" : "#3e455e"));
-        PlayButton.Background = brush;
+        // Icon color logic handled in XAML or here if transparent
+        PlayIcon.Foreground = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(_isPlaying ? "#818cf8" : "White"));
     }
 
     private void UpdateTimerDisplay()
@@ -317,15 +453,6 @@ public partial class MainWindow : Window
         else
         {
             TimerText.Text = "00:00";
-        }
-    }
-
-    // Allow dragging the window by clicking anywhere on the border
-    private void Border_MouseDown(object sender, MouseButtonEventArgs e)
-    {
-        if (e.ChangedButton == MouseButton.Left)
-        {
-            this.DragMove();
         }
     }
 }
